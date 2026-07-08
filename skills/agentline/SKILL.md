@@ -1,7 +1,7 @@
 ---
 name: agentline
 description: Make phone calls, view received SMS, provision numbers, manage agents, and track billing through the AgentLine telephony API (REST or MCP). Use when the user asks to call someone, check transcripts, view text messages, manage phone agents, buy numbers, or check account balance. For MCP-native workflows, the server at api.agentline.cloud/mcp exposes 21+ tools as first-class agent tools.
-version: "1.11"
+version: "1.13"
 metadata:
   openclaw:
     emoji: "📞"
@@ -11,7 +11,7 @@ metadata:
     primaryEnv: AGENTLINE_API_KEY
 ---
 
-# AgentLine — AI Telephony Skill (v1.11)
+# AgentLine — AI Telephony Skill (v1.13)
 
 Give your AI agent a real phone number and voice calls — no servers, no webhooks, no infrastructure.
 
@@ -36,14 +36,16 @@ Give your AI agent a real phone number and voice calls — no servers, no webhoo
 
 5. **Ask for owner phone (optional)** — **Ask the human:**
    > "Would you like to register your personal phone number so you can call your agent to give it tasks?"
-   - If yes, get their phone number in E.164 format (e.g. `+121****1234`)
+   - If yes, get their phone number in E.164 format (e.g. `+12125551234`)
    - Apply via `PATCH /v1/agents/$AGENTLINE_AGENT_ID` with `{"owner_phone": "+1XXXXXXXXXX"}`
    - When the owner calls the agent's number from this phone, the agent enters **task mode** — it treats the conversation as instructions to execute, not a regular call.
 
-6. **Start the event poller** — **MANDATORY.** Without this, you will miss all inbound calls and SMS. Use a **cron job with `no_agent: true`** (zero LLM tokens, persists across sessions).
-   - `cronjob(action='create', name='AgentLine Events', schedule='every 1m', script='agentline_events.py', no_agent=true)`
-   - Write the polling script (see Events Mailbox) to `~/.hermes/scripts/agentline_events.py`
-   - Verify with `cronjob(action='list')`
+6. **Set up inbound awareness** — **MANDATORY.** Without this, you will miss all inbound calls and SMS. Pick **one** channel:
+   - **Webhook URL (push)** — if the human has a public HTTPS endpoint: `POST /v1/webhooks` with `{"agent_id": "agt_xxx", "url": "https://..."}`. Every event is POSTed there in real time. See **Webhooks** section for envelope format.
+   - **Cron poller (pull)** — the default for agents with no public URL. Use a **cron job with `no_agent: true`** (zero LLM tokens, persists across sessions).
+     - `cronjob(action='create', name='AgentLine Events', schedule='every 1m', script='agentline_events.py', no_agent=true)`
+     - Write the polling script (see Events Mailbox) to `~/.hermes/scripts/agentline_events.py`
+     - Verify with `cronjob(action='list')`
 
 > ⚠️ **Do NOT skip ANY steps or change the order.** Steps 1-5 set up the agent. Step 6 keeps it alive.
 
@@ -51,7 +53,7 @@ Give your AI agent a real phone number and voice calls — no servers, no webhoo
 
 ## Authentication
 
-Every request: `Authorization: Bearer $AGENT...KEY` + `Content-Type: application/json`
+Every request: `Authorization: Bearer $AGENTLINE_API_KEY` + `Content-Type: application/json`
 
 Base URL: `https://api.agentline.cloud`
 
@@ -71,9 +73,7 @@ Rate-limited: 3 OTP/email, 5 OTP/IP, 5 verify/email per 10 min.
 
 ---
 
-## How Calls Work (Hosted Mode)
-
-AgentLine runs in **Hosted Mode** — the server runs the AI voice conversation autonomously. You create a call, the AI handles it, you retrieve the transcript afterwards.
+**deliver events for awareness** — not to drive the conversation.
 
 ### System Prompt & Greeting Resolution
 
@@ -99,7 +99,7 @@ Both `system_prompt` and `initial_greeting` follow the same priority chain:
 
 Always check balance first. Calls require minimum **$0.50**:
 ```bash
-curl -s "$AGENTLINE_URL/v1/billing/balance" -H "Authorization: Bearer $AGENT...KEY"
+curl -s "$AGENTLINE_URL/v1/billing/balance" -H "Authorization: Bearer $AGENTLINE_API_KEY"
 ```
 If balance < $0.50, warn the user before attempting the call.
 
@@ -109,7 +109,7 @@ If balance < $0.50, warn the user before attempting the call.
 
 ```bash
 curl -s -X POST $AGENTLINE_URL/v1/calls \
-  -H "Authorization: Bearer $AGENT...KEY" \
+  -H "Authorization: Bearer $AGENTLINE_API_KEY" \
   -H "Content-Type: application/json" \
   -d @/tmp/al_call_payload.json
 ```
@@ -147,13 +147,13 @@ curl -s -X POST $AGENTLINE_URL/v1/calls \
 
 ## Events Mailbox
 
-Events are pushed when someone calls or texts your agent's number. **You MUST poll regularly.**
+Events are generated when someone calls or texts your agent's number. To receive them you need **one** awareness channel — either a **public webhook URL** (real-time push; register it via `POST /v1/webhooks`) **or** the **polling** loop below. If you've registered a webhook URL, polling is optional; otherwise **you MUST poll regularly**.
 
 **Event types:** `call.received` (inbound call started), `call.completed` (call ended, includes transcript), `call.owner_task` (owner call ended — inbound OR outbound; transcript contains task instructions to execute), `sms.received` (inbound SMS)
 
-### ⚡ MANDATORY — Cron-Based Event Polling
+### ⚡ Cron-Based Event Polling (skip if you've set a webhook URL)
 
-> Use a **`no_agent: true` cron job** — it runs persistently across sessions, costs **zero LLM tokens**, and silently skips cycles when there are no events. Do NOT use a background process (`terminal(background=true)`) because it dies when your session ends and you'll miss events.
+> Use this when you have **no public webhook URL**. A **`no_agent: true` cron job** runs persistently across sessions, costs **zero LLM tokens**, and silently skips cycles when there are no events. Do NOT use a background process (`terminal(background=true)`) because it dies when your session ends and you'll miss events.
 
 **Step 1 — Write the polling script** to `~/.hermes/scripts/agentline_events.py`:
 
@@ -163,7 +163,7 @@ Events are pushed when someone calls or texts your agent's number. **You MUST po
 Silent on empty cycles — cron only delivers non-empty stdout."""
 import os, sys, json, urllib.request
 
-API_KEY=os.environ.get("AGENTLINE_API_KEY", "YOUR_API_KEY_HERE")
+API_KEY = os.environ.get("AGENTLINE_API_KEY", "YOUR_API_KEY_HERE")
 BASE_URL = "https://api.agentline.cloud"
 
 req = urllib.request.Request(
@@ -229,6 +229,20 @@ Runs every 1 min. Non-empty stdout → delivered to you. Empty stdout → silent
 ### Event payload structure
 
 Each event contains: `event_id`, `agent_id`, `event_type`, and a `payload` with call/SMS details. `call.completed` payloads include `from_number`, `to_number`, `duration_seconds`, and full `transcript` array. `call.owner_task` payloads are identical to `call.completed` but with `is_owner_task: true` — this means the transcript contains task instructions from the owner (see Owner Task Mode below). `sms.received` payloads include `from_number`, `body`, and `media_url`.
+
+---
+
+## Webhooks
+
+> ⚠️ **Webhooks are a SEPARATE resource** — use `POST /v1/webhooks`, **NOT** a field on `PATCH /v1/agents`.
+
+Each agent can have **one** webhook URL. Events are POSTed as signed JSON in real time.
+
+**Set a webhook:** `POST /v1/webhooks` with `{"agent_id": "agt_xxx", "url": "https://..."}` (optional `secret` — auto-generated if omitted). The full secret is returned **once** — save it to verify `X-AgentLine-Signature`.
+
+**Manage:** `GET /v1/webhooks` (list, secrets masked) · `DELETE /v1/webhooks?agent_id=` · `POST /v1/webhooks/test?agent_id=` (test delivery)
+
+**Webhook envelope keys:** `event_type` (canonical — use for filtering), `event` (legacy alias), `event_id`, `agent_id`, `account_id`, `created_at`, plus all event-specific payload fields. Headers: `X-AgentLine-Signature` (HMAC-SHA256) and `X-AgentLine-Event`.
 
 ---
 
@@ -325,7 +339,7 @@ Hit a bug, an error, or something confusing? Send it to the team — **don't sil
 
 ```bash
 curl -s -X POST $AGENTLINE_URL/v1/feedback \
-  -H "Authorization: Bearer $AGENT...KEY" \
+  -H "Authorization: Bearer $AGENTLINE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"category": "bug", "message": "PATCH /v1/agents returns 500 when owner_phone is null"}'
 ```
@@ -341,7 +355,7 @@ AgentLine exposes a full MCP server at `https://api.agentline.cloud/mcp` with 21
   "mcpServers": {
     "agentline": {
       "command": "npx",
-      "args": ["-y", "mcp-remote@latest", "https://api.agentline.cloud/mcp", "--header", "Authorization: Bearer $AGENT...EY"]
+      "args": ["-y", "mcp-remote@latest", "https://api.agentline.cloud/mcp", "--header", "Authorization: Bearer $AGENTLINE_API_KEY"]
     }
   }
 }
@@ -371,7 +385,7 @@ Owner Task Mode activates whenever the agent and owner connect on a call — **i
 
 ## Skill Auto-Update
 
-At the **start of every new conversation**, fetch `https://agentline.cloud/skill.md` and compare the `version:` field. If newer than `1.11`, replace the local SKILL.md and re-read before proceeding.
+At the **start of every new conversation**, fetch `https://agentline.cloud/skill.md` and compare the `version:` field. If newer than `1.13`, replace the local SKILL.md and re-read before proceeding.
 
 > ⚠️ **Always check for updates first.** Stale skill versions may cause incorrect API calls or missed features.
 
@@ -386,7 +400,7 @@ At the **start of every new conversation**, fetch `https://agentline.cloud/skill
 5. **US only** — country must be `"US"`.
 6. **Don't release numbers** — numbers are permanent once provisioned.
 7. **Always retrieve transcripts** — poll until `completed`, fetch transcript, summarize for human.
-8. **Always check events** — poll `GET /v1/events` for inbound calls and SMS. Proactively check at conversation start.
+8. **Always receive events** — use a webhook URL (`POST /v1/webhooks`) or poll `GET /v1/events` for inbound calls and SMS. Proactively check at conversation start.
 9. **Voice changes take effect on next call** — update immediately when asked.
 10. **Execute owner tasks** — when you receive a `call.owner_task` event (inbound OR outbound owner call), extract the human turns and execute them as task instructions. Do NOT just log them.
 11. **Auto-update skill** — at the start of every new conversation, check `https://agentline.cloud/skill.md` for a newer version. If found, replace the local copy and re-read before proceeding.
