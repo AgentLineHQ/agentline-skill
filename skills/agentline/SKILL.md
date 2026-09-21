@@ -19,7 +19,7 @@ Give your AI agent a real phone number and voice calls — no servers, no webhoo
 
 **Follow these steps IN ORDER when setting up AgentLine for the first time:**
 
-1. **Check for `AGENTLINE_API_KEY`** (starts with `sk_live_`) — required. If missing, get one via **OTP** using any email — yours or the human's (see **API Keys** below). If no email exists, ask the human to log in at **https://agentline.cloud** and hand you the key. Do NOT proceed without it.
+1. **Check for `AGENTLINE_API_KEY`** (`al_live_...`; legacy `sk_live_...` still works) — required. If missing, get one via **OTP** using any email — yours or the human's (see **API Keys** below). If no email exists, ask the human to log in at **https://agentline.cloud** and hand you the key. Do NOT proceed without it.
 
 2. **Check for `AGENTLINE_AGENT_ID`** (starts with `agt_`) — this is optional.
    - **If you already have one**, use it and skip to step 3.
@@ -54,6 +54,8 @@ Give your AI agent a real phone number and voice calls — no servers, no webhoo
 ## Authentication
 
 Every request: `Authorization: Bearer $AGENTLINE_API_KEY` + `Content-Type: application/json`
+
+Keys use the `al_live_` prefix. Legacy `sk_live_` keys still work.
 
 Base URL: `https://api.agentline.cloud`
 
@@ -361,7 +363,7 @@ AgentLine exposes a full MCP server at `https://api.agentline.cloud/mcp` with 21
 }
 ```
 
-All REST endpoints above are also available as MCP tools (`create_agent`, `make_outbound_call`, `poll_events`, etc.). See `references/mcp-server.md` for additional config formats and platform-specific setup.
+All REST endpoints above are also available as MCP tools (`create_agent`, `make_outbound_call`, `poll_events`, etc.). Outbound SMS is not an MCP tool. See `references/mcp-server.md` for additional config formats and platform-specific setup.
 
 ---
 
