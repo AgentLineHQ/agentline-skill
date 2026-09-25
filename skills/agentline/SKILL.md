@@ -146,7 +146,7 @@ After dialing: **keep pinging every 10 seconds until the call ends.** On each pi
 
 Delivered to your webhook in real time (see Step 6).
 
-**Types:** `call.received`, `call.utterance` (live relay), `call.completed`, `call.owner_task`, and `sms.received`.
+**Types:** `call.received`, `call.utterance`, `call.completed`, `call.owner_task`, `call.failed`, `call.busy`, `call.no-answer`, `call.canceled`, `sms.received`, `webhook.test`. `call.utterance` is the live relay turn.
 
 **Optional manual fallback** (consume-once mailbox, if you ever need to pull events without the live webhook): `GET /v1/events` (auto-deletes after read), `GET /v1/events/peek` (preview). Filter: `?agent_id=` or `?event_type=`.
 
@@ -155,10 +155,10 @@ Every event has `event_id`, `agent_id`, `event_type`, and `payload`. Live uttera
 
 ### Outbound WebSocket
 
-The installer uses `wss://api.agentline.cloud/v1/events/ws?agent_id=agt_xxx&runtime=<runtime>`. Events remain durable until acknowledged. For a live event, send:
+The installer uses `wss://api.agentline.cloud/v1/events/ws?agent_id=agt_xxx&runtime=<runtime>`. Events remain durable until acknowledged. For a live event, send short facts (not a script) plus a `disposition`:
 
 ```json
-{"type":"context","event_id":"evt_xxx","call_id":"call_xxx","turn_id":"turn_xxx","push_token":"...","context":"Your inbox has no new emails."}
+{"type":"context","event_id":"evt_xxx","call_id":"call_xxx","turn_id":"turn_xxx","push_token":"...","context":"3 unread emails: John invoice, Mary lunch, bank statement","disposition":"done"}
 {"type":"ack","event_id":"evt_xxx"}
 ```
 
@@ -168,30 +168,43 @@ Always echo the exact `turn_id`; late or cancelled context is rejected and must 
 
 ## Relay Mode (mid-call context injection)
 
-Activates automatically when the persistent relay or a healthy webhook is connected. Pushed context is stored as the assistant turn so later hosted responses retain it as conversation context.
+Activates automatically when the persistent relay or a healthy webhook is connected. On `call.utterance`, send **short facts**, not a script. The hosted voice rephrases those facts; it does not speak your text verbatim. Pushed context is stored as the assistant turn so later hosted responses retain it as conversation context.
 
 1. Caller speaks → AgentLine sends a `call.utterance` event over WebSocket or webhook.
 2. Read `call_id`, `turn_id`, `session_key`, and `push_token`.
 3. Do your work quickly.
-4. **Push one or two concise caller-ready sentences** to the full `push_context_url`:
+4. **Push short facts and a `disposition`** to the full `push_context_url`:
 
 ```bash
 curl -s -X POST "$PUSH_CONTEXT_URL" \
   -H "Authorization: Bearer $AGENTLINE_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"turn_id":"TURN_ID","context":"You have three unread emails: one from John about an invoice, one from Mary about lunch, and one bank statement."}'
+  -d '{"turn_id":"TURN_ID","context":"3 unread emails: John invoice, Mary lunch, bank statement","disposition":"done"}'
 ```
 
-   …or via MCP: `push_call_context(call_id="call_xxx", body={"turn_id":"turn_xxx","context":"..."})`.
-5. AgentLine injects that context into the live call.
+   …or via MCP: `push_call_context(call_id="call_xxx", body={"turn_id":"turn_xxx","context":"3 unread emails: John invoice, Mary lunch, bank statement","disposition":"done"})`.
+5. AgentLine applies the disposition. `done`, `facts`, and `failed` close the turn and the hosted voice rephrases the facts in one or two sentences.
+
+### Disposition
+
+`POST /v1/calls/{call_id}/context` takes facts in `context` plus a `disposition`:
+
+| `disposition` | What happens |
+|---------------|----------------|
+| `progress` | Adds a note and keeps the caller on hold with canned lines. The text is not spoken. |
+| `done` | Default. Closes the turn. The hosted voice rephrases the facts in one or two sentences. |
+| `facts` | Closes the turn. The hosted voice rephrases the facts in one or two sentences. |
+| `failed` | Closes the turn. The hosted voice rephrases the facts in one or two sentences. |
+| `noop` | Closes the turn with no facts. |
 
 ### DO NOT (most common agent failures)
+- ❌ Write a script or the exact words to say. Send facts; the voice rephrases them.
 - ❌ Route the answer to WhatsApp/SMS/chat — the caller is on a phone call and hears only silence.
 - ❌ Create skills/plans/files or ask follow-up questions — the caller is waiting NOW.
 - ❌ Rely on a generic acknowledgement — context must be pushed explicitly.
 
 ### Push endpoint
-`POST /v1/calls/{call_id}/context?turn_id=turn_xxx` → `200` if accepted; `409` if stale/cancelled; `410` if the call ended. Include the event's push token when using token authentication.
+`POST /v1/calls/{call_id}/context` with `turn_id`, `context` (short facts), and `disposition`. `200` if accepted; `409` if stale/cancelled; `410` if the call ended. Include the event's push token when using token authentication. `turn_id` may also be passed as `?turn_id=turn_xxx`.
 
 ### When relay mode does NOT apply
 - **No active relay or webhook** → pure hosted mode.
@@ -219,7 +232,7 @@ Each agent needs one number. **US only. $2.00/month.**
 
 Balance: `GET /v1/billing/balance`. Expenditure: `GET /v1/billing/expenditure?period=current_month` (also `last_month`, `all_time`, `YYYY-MM`). Call charges: `GET /v1/billing/expenditure/calls`. Number charges: `GET /v1/billing/expenditure/numbers`. Verify: `GET /v1/billing/verify/{call_id}`.
 
-Rates: calls **$0.10/min** (billed per second), number **$2.00/month**.
+Rates: calls **$0.10/min**. A 0-second call is free. A connected call has a one-minute minimum, then bills per second, rounded up to the cent. Number: **$2.00/month**.
 
 ## Owner Task Mode
 
@@ -265,5 +278,5 @@ All REST endpoints are also MCP tools (`create_agent`, `make_outbound_call`, `pu
 8. **Install the persistent relay** — receive live turns through WebSocket and inspect non-live events through its list/ack inbox. Use a webhook only as fallback.
 9. **Voice changes apply on the next call.**
 10. **Execute owner tasks** — `call.owner_task` human turns are instructions to act on, not log.
-11. **Push context on `call.utterance`** — echo `call_id`, `turn_id`, and `push_token` through WebSocket or `push_context_url`. A 409 means stop; never reuse the result for another turn.
+11. **Push facts on `call.utterance`** — echo `call_id`, `turn_id`, and `push_token`. Send short facts plus a `disposition` (`done` by default), not a script. `progress` only holds with canned lines and is not spoken. `done`, `facts`, and `failed` close the turn and the hosted voice rephrases the facts. `noop` closes with no facts. A 409 means stop; never reuse the result for another turn.
 12. **Report issues** via `POST /v1/feedback`.
