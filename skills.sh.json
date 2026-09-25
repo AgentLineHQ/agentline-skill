@@ -3,7 +3,7 @@
   "groupings": [
     {
       "title": "Telephony & Communication",
-      "description": "Give AI agents real phone numbers. Make outbound calls, handle inbound calls, send and receive SMS — all through a simple API or MCP server.",
+      "description": "Give AI agents real phone numbers. Make outbound calls, handle inbound calls, and view received SMS — all through a simple API or MCP server.",
       "skills": [
         "agentline"
       ]

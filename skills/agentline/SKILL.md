@@ -1,7 +1,7 @@
 ---
 name: agentline
-description: Make phone calls, view received SMS, provision numbers, manage agents, and track billing through the AgentLine telephony API (REST or MCP). Use when the user asks to call someone, check transcripts, view text messages, manage phone agents, buy numbers, or check account balance. For MCP-native workflows, the server at api.agentline.cloud/mcp exposes 21+ tools as first-class agent tools.
-version: "1.13"
+description: Make/receive phone calls, view SMS, provision numbers, manage agents, and check billing via the AgentLine telephony API (REST or MCP). Use the persistent relay or a webhook to receive inbound calls, SMS, and live-call utterances in real time. Use when the user asks to call someone, check transcripts, view text messages, manage phone agents, buy numbers, or check balance. For MCP-native workflows, api.agentline.cloud/mcp exposes 21+ tools.
+version: "1.19"
 metadata:
   openclaw:
     emoji: "📞"
@@ -11,60 +11,66 @@ metadata:
     primaryEnv: AGENTLINE_API_KEY
 ---
 
-# AgentLine — AI Telephony Skill (v1.13)
+# AgentLine — AI Telephony Skill (v1.19)
 
-Give your AI agent a real phone number and voice calls — no servers, no webhooks, no infrastructure.
+Give your AI agent a real US phone number and voice. Install the persistent relay to receive inbound calls, SMS, and live-call utterances in real time; use a public HTTPS webhook as fallback.
 
 ## First-Time Setup
 
-**Follow these steps IN ORDER when setting up AgentLine for the first time:**
+**Follow in order:**
 
-1. **Check for `AGENTLINE_API_KEY`** (starts with `sk_live_`) — required. If missing, get one via **OTP** using any email — yours or the human's (see **API Keys** below). If no email exists, ask the human to log in at **https://agentline.cloud** and hand you the key. Do NOT proceed without it.
+1. **`AGENTLINE_API_KEY`** (`al_live_...`; legacy `sk_live_...` still works) — required. Missing? Get one via **AgentID** (if enabled) or **OTP** to any inbox you can read (yours, the human's, or the AgentMail inbox — see API Keys). If `/v1/auth/agentid/start` returns 404, use OTP. No email and no AgentID? Ask the human to log in at https://agentline.cloud and hand you the key. Do not proceed without it.
+2. **`AGENTLINE_AGENT_ID`** (`agt_...`) — optional. Missing? Create one: `POST /v1/agents {"name": "My Agent"}`. Save the returned ID.
+3. **Buy a number** — ask the human for a preferred area code (e.g. 212, 415), then `POST /v1/numbers {"agent_id": "...", "area_code": "XXX"}`. Try another code if unavailable.
+4. **Voice** — always ask: male or female? Presets: `female-1` (friendly), `female-2` (reassuring), `female-3` (guide), `male-1` (supportive), `male-2` (thinker), `male-3` (helpful). Apply: `PATCH /v1/agents/{id} {"voice_id": "..."}`.
+5. **Owner phone (optional)** — ask: "Want to register your personal number so you can call your agent to give it tasks?" If yes: `PATCH /v1/agents/{id} {"owner_phone": "+1XXXXXXXXXX"}`. Calls from it enter **task mode**.
+6. **Install the persistent relay** — **MANDATORY when terminal access is available.** Do not ask the human to identify the runtime:
+   ```bash
+   python -c "import urllib.request; urllib.request.urlretrieve('https://api.agentline.cloud/static/agentline_relay.py','agentline_relay.py')"
+   python agentline_relay.py install --agent-id agt_xxx
+   ```
+   Replace `agt_xxx` with the real agent ID. The installer auto-detects Hermes, OpenClaw, Claude Code, or Codex, creates an isolated environment, verifies readiness, preserves one runtime session per phone call, and installs a persistent user service. It uses `AGENTLINE_API_KEY` from the environment.
+   - Inspect detection with `python agentline_relay.py detect`.
+   - Override detection only when needed: `--runtime hermes|openclaw|claude-code|codex|custom`.
+   - On Windows PowerShell, use `Invoke-WebRequest ... -OutFile agentline_relay.py`; do not rely on Bash variable syntax.
+   - Live `call.utterance` events invoke the runtime. SMS, completions, and owner tasks go to the private local inbox.
+   - At startup, consume the inbox exactly once:
+     `python ~/.agentline/agentline_relay.py inbox list --agent-id agt_xxx`
+     then acknowledge handled events with `inbox ack --agent-id agt_xxx --event-id evt_xxx`.
 
-2. **Check for `AGENTLINE_AGENT_ID`** (starts with `agt_`) — this is optional.
-   - **If you already have one**, use it and skip to step 3.
-   - **If you do NOT have one**, create a new agent now by calling `POST /v1/agents` with `{"name": "My Agent"}`. Save the returned agent ID.
+   If terminal access or service installation is unavailable, use a stable public webhook as fallback: `POST /v1/webhooks {"agent_id":"agt_xxx","url":"https://your-endpoint/agentline"}`. Polling is only a non-live fallback.
 
-3. **Ask for area code and provision the number** — ask the human for their preferred area code (e.g. 212, 415, 313), then `POST /v1/numbers` with `{"agent_id": "...", "area_code": "XXX"}`. If unavailable, ask for a different code.
-
-4. **Ask for voice preference** — **Always ask the human:**
-   > "Would you like your agent to have a **male** or **female** voice?"
-   - If **female**: `"female-1"` (friendly), `"female-2"` (reassuring), or `"female-3"` (guide)
-   - If **male**: `"male-1"` (supportive), `"male-2"` (thinker), or `"male-3"` (helpful)
-   - Apply via `PATCH /v1/agents/$AGENTLINE_AGENT_ID` with `{"voice_id": "chosen_preset"}`
-   - Available presets: `female-1`, `female-2`, `female-3`, `male-1`, `male-2`, `male-3`
-
-5. **Ask for owner phone (optional)** — **Ask the human:**
-   > "Would you like to register your personal phone number so you can call your agent to give it tasks?"
-   - If yes, get their phone number in E.164 format (e.g. `+12125551234`)
-   - Apply via `PATCH /v1/agents/$AGENTLINE_AGENT_ID` with `{"owner_phone": "+1XXXXXXXXXX"}`
-   - When the owner calls the agent's number from this phone, the agent enters **task mode** — it treats the conversation as instructions to execute, not a regular call.
-
-6. **Set up inbound awareness** — **MANDATORY.** Without this, you will miss all inbound calls and SMS. Pick **one** channel:
-   - **Webhook URL (push)** — if the human has a public HTTPS endpoint: `POST /v1/webhooks` with `{"agent_id": "agt_xxx", "url": "https://..."}`. Every event is POSTed there in real time. See **Webhooks** section for envelope format.
-   - **Cron poller (pull)** — the default for agents with no public URL. Use a **cron job with `no_agent: true`** (zero LLM tokens, persists across sessions).
-     - `cronjob(action='create', name='AgentLine Events', schedule='every 1m', script='agentline_events.py', no_agent=true)`
-     - Write the polling script (see Events Mailbox) to `~/.hermes/scripts/agentline_events.py`
-     - Verify with `cronjob(action='list')`
-
-> ⚠️ **Do NOT skip ANY steps or change the order.** Steps 1-5 set up the agent. Step 6 keeps it alive.
+> ⚠️ Installing services, packages, or gateway integrations may trigger the runtime's safety approval. Do not bypass that approval; ask the human once and continue after approval.
 
 ---
 
 ## Authentication
 
-Every request: `Authorization: Bearer $AGENTLINE_API_KEY` + `Content-Type: application/json`
+Every request: `Authorization: Bearer $AGENTLINE_API_KEY` + `Content-Type: application/json`. Base: `https://api.agentline.cloud`.
 
-Base URL: `https://api.agentline.cloud`
+### API Keys
+Same **verified inbox string** → same AgentLine account. A human Gmail and an AgentMail inbox are different accounts unless the strings match. Do not use AgentID `owner_email` as the account email.
 
-### API Keys (OTP — no browser)
+If `AGENTLINE_API_KEY` is already set, skip. MCP still requires a key first (paste `al_live_` on the consent page). AgentID is not MCP.
 
-No key yet? Email a 6-digit code to **any address — yours or the human's** (same email → same account). Whoever owns the inbox reads the code.
+**Headless fallback** (no browser tool and no human): `POST /v1/auth/otp` → `POST /v1/auth/verify` → write `api_key` from the raw HTTP body.
+
+**AgentID path** (needs a waiting-page user-agent + AgentMail signing material):
+1. `POST /v1/auth/agentid/start` with optional `{ "login_hint": "<inbox exactly as registered>" }` (do not lowercase). **404 → OTP.**
+2. Print/open `authorize_url`. Waiting page shows a 22-character `jti`. Do not scrape AgentID HTML; do not read the API key from the AgentLine callback page (it never has it).
+3. Approve: `POST https://api.auth.agentid.com/v0/authorize/approve` (`typ: agentid-approval+jwt`) — https://auth.agentid.com/docs/approve. `inbox_id` must match byte-for-byte including case.
+4. `POST /v1/auth/agentid/poll` `{"session_id":"..."}` every `poll_interval` seconds.
+   - **202 pending** → only continue.
+   - **200 with `api_key`** → success.
+   - **200 `already_delivered` / 401 / 410** → terminal. Do not keep polling this session. Recover via `POST /v1/auth/keys`, the human at https://agentline.cloud, or a **new** start.
+5. Write `api_key` from the raw HTTP body (`jq -r .api_key`) without piping the secret through the model.
 
 | Method | Path | Auth | Body / Purpose |
-|--------|------|------|---------|
-| `POST` | `/v1/auth/otp` | none | `{"email":"..."}` → emails 6-digit code |
-| `POST` | `/v1/auth/verify` | none | `{"email":"...","otp":"123456"}` → key (shown once; new acct = **$2.50 bonus**) |
+|--------|------|------|----------------|
+| `POST` | `/v1/auth/otp` | none | `{"email":"..."}` → emails code |
+| `POST` | `/v1/auth/verify` | none | `{"email":"...","otp":"123456"}` → key (shown once) |
+| `POST` | `/v1/auth/agentid/start` | none | optional `login_hint` → `authorize_url` + `session_id` |
+| `POST` | `/v1/auth/agentid/poll` | none | `{"session_id":"..."}` → key once |
 | `POST` | `/v1/auth/keys` | Bearer | Mint another key |
 | `GET` | `/v1/auth/keys` | Bearer | List keys (marks current) |
 | `DELETE` | `/v1/auth/keys/{id}` | Bearer | Revoke (can't revoke current) |
@@ -73,39 +79,24 @@ Rate-limited: 3 OTP/email, 5 OTP/IP, 5 verify/email per 10 min.
 
 ---
 
-**deliver events for awareness** — not to drive the conversation.
+## System Prompt & Greeting
 
-### System Prompt & Greeting Resolution
+Priority (highest wins): per-call (`POST /v1/calls` field) → agent default (`PATCH /v1/agents/{id}`) → hardcoded fallback.
 
-Both `system_prompt` and `initial_greeting` follow the same priority chain:
+- Set on the **agent** for a persistent personality/greeting on ALL calls.
+- Set **per-call** for a one-time, context-specific prompt/greeting (doesn't change the agent default).
 
-| Priority | Where to set | Scope | API |
-|----------|-------------|-------|-----|
-| **1 (highest)** | Per-call override | This call only | `POST /v1/calls` with `system_prompt` / `initial_greeting` |
-| **2** | Agent default | All calls on this agent | `PATCH /v1/agents/{id}` with `system_prompt` / `initial_greeting` |
-| **3 (lowest)** | Hardcoded fallback | Last resort | Generic prompt + "Hello, how can I help you today?" |
-
-**When to use which:**
-- **Set on the agent** (`PATCH /v1/agents`) when you want a persistent personality/greeting for ALL calls (inbound AND outbound).
-- **Set per-call** (`POST /v1/calls`) when you need a one-time context-specific prompt/greeting for a single outbound call. Does NOT change the agent's default.
-
-> ⚠️ **`system_prompt` is a FULL REPLACE, not append.** The voice AI has no memory between calls — include everything (personality, instructions, current context) in the prompt.
-
-> ⚠️ **`initial_greeting`** is what the agent SPEAKS ALOUD at the start of the call. It is NOT part of the system prompt — it's the first thing the caller hears. Set it on the agent for a consistent greeting, or override it per-call for context-specific openers.
+> ⚠️ `system_prompt` is a FULL REPLACE, not append — the voice AI has no memory between calls; include everything. `initial_greeting` is what the agent **speaks aloud** first (not part of the prompt).
 
 ---
 
 ## Before Calling — Balance Check
 
-Always check balance first. Calls require minimum **$0.50**:
-```bash
-curl -s "$AGENTLINE_URL/v1/billing/balance" -H "Authorization: Bearer $AGENTLINE_API_KEY"
-```
-If balance < $0.50, warn the user before attempting the call.
+Calls need min **$0.50**: `GET /v1/billing/balance`. Warn the human if below threshold.
 
 ## Make an Outbound Call
 
-**Pitfall:** Always write JSON payloads to a temp file and use `-d @file` — inline payloads with special characters break:
+Write JSON to a temp file and use `-d @file` (inline payloads with special characters break):
 
 ```bash
 curl -s -X POST $AGENTLINE_URL/v1/calls \
@@ -117,238 +108,148 @@ curl -s -X POST $AGENTLINE_URL/v1/calls \
 | Field | Required | Description |
 |-------|----------|-------------|
 | `agent_id` | Yes | Your agent ID |
-| `to_number` | Yes | E.164 phone number to call |
-| `system_prompt` | No | Dynamic prompt for this call only (overrides default) |
-| `initial_greeting` | No | What the agent says first when the person picks up |
-| `voice_id` | No | `"female-1"`, `"female-2"`, `"female-3"`, `"male-1"`, `"male-2"`, `"male-3"` |
+| `to_number` | Yes | E.164 number to call |
+| `system_prompt` | No | One-call override |
+| `initial_greeting` | No | What the agent says first |
+| `voice_id` | No | `female-1/2/3`, `male-1/2/3` |
 
-**After every outbound call:** Poll `GET /v1/calls/<call_id>` every 15-30s until `status=completed`, then `GET /v1/calls/<call_id>/transcript`. Real calls take 45-120s. Use `sleep N && curl ... | python3 -c` to check status + extract transcript in one shot. Summarize and share with human. Never consider a call "done" without the transcript.
+After dialing: **keep pinging every 10 seconds until the call ends.** On each ping, `GET /v1/calls/{id}` for status and `GET /v1/calls/{id}/transcript` so you know what is happening on the live call (who answered, what was said, IVR/voicemail). Do not wait silently or poll less often. Continue until `status` is `completed` or `failed`. Real calls take 45-120s. Never consider a call "done" without the final transcript.
 
-**Outbound call to `owner_phone` = Owner Task Mode.** If `to_number` equals the agent's `owner_phone`, the call is a **task call**, not a support call — the AI enters task mode and the completed call emits `call.owner_task` (with `is_owner_task: true`) instead of a plain `call.completed`. Treat the human turns as instructions to EXECUTE. See Owner Task Mode below.
+**Owner task mode:** if `to_number` equals the agent's `owner_phone`, it's a **task call** — the completed call emits `call.owner_task` (treat the human turns as instructions to EXECUTE).
 
-**If you get 400 "Agent has no active phone number"**, provision one first.
+**Voicemail / IVR:** AgentLine already navigates phone menus with real DTMF tones and leaves voicemail on outbound calls. Do **not** add "stay silent on automated messages" or "hang up if you hear press 1" to the system prompt — that fights the built-in handler and is how agents get stuck pressing `0` on a mailbox. On the first 10s ping, check the transcript: if the agent is pressing a key the menu did **not** offer, or repeating the same key, hang up.
 
-**Pitfall — agent loops on voicemail/call control:** The voice AI will repeat its greeting 3-4 times into voicemail or call-control prompts ("press 3 to connect", "please leave a message"). This wastes credits and sounds bad. After the first 15-20s poll, check the transcript: if human turns are all automated system messages (not real human replies), hang up immediately. Feedback surveys and check-in calls don't work on voicemail.
+**To actually leave a voicemail** you MUST set `voicemail_message` on the agent (`PATCH /v1/agents/{id}`). Include who you are, why you're calling, and a callback number. Without it the agent detects the mailbox and hangs up (on "press 1 to disconnect / press 2 to record" it presses 1). Mailbox greetings ("X is not available", "leave a message after the beep") wait for the beep and speak that message; "press 2 to record" presses 2 first, then leaves it.
 
-**Exception — business inquiry calls (apartments, doctor's offices, etc.):** For these, leaving a voicemail IS the right outcome. If the call reaches "please leave a message at the beep," let the agent leave a voicemail with: who you are, what you want, callback number/email, and a clear ask. Don't hang up. Include a voicemail fallback in the system prompt for these call types.
-
-**Pitfall — phone tree / automated hold systems:** Many businesses have automated greetings ("This call may be recorded", "We will be with you shortly", "Thank you for calling X"). The voice AI will try to respond to every one of these as if it's a human, repeating the greeting and burning credits. To prevent this, add to the system prompt: "If you hear an automated message or hold music, stay silent and wait. Only speak when a real person greets you." Without this instruction, the agent will get into a loop responding to hold messages.
-
----
+**If you get 400 "Agent has no active phone number"** — provision one first (Step 3).
 
 ## Call Management
 
-- **Hang up:** `POST /v1/calls/<call_id>/hangup`
-- **Transcript:** `GET /v1/calls/<call_id>/transcript` → `[{role, text, timestamp}, ...]`
-- **List calls:** `GET /v1/calls?limit=20` or `?status=completed&limit=10`
-- **Call details:** `GET /v1/calls/<call_id>`
+- **Hang up:** `POST /v1/calls/{id}/hangup`
+- **Transcript:** `GET /v1/calls/{id}/transcript` → `[{role, text, timestamp}]`
+- **List:** `GET /v1/calls?limit=20` or `?status=completed&limit=10`
+- **Details:** `GET /v1/calls/{id}`
 
 ---
 
-## Events Mailbox
+## Webhooks (primary awareness)
 
-Events are generated when someone calls or texts your agent's number. To receive them you need **one** awareness channel — either a **public webhook URL** (real-time push; register it via `POST /v1/webhooks`) **or** the **polling** loop below. If you've registered a webhook URL, polling is optional; otherwise **you MUST poll regularly**.
+> Webhooks are a SEPARATE resource — use `POST /v1/webhooks`, NOT a field on `PATCH /v1/agents`. Each agent has one webhook URL; events are POSTed as signed JSON in real time.
 
-**Event types:** `call.received` (inbound call started), `call.completed` (call ended, includes transcript), `call.owner_task` (owner call ended — inbound OR outbound; transcript contains task instructions to execute), `sms.received` (inbound SMS)
+**Set:** `POST /v1/webhooks {"agent_id":"agt_xxx","url":"https://..."}` — optional `secret` (auto-generated if omitted) and `signature_header` (default `X-Webhook-Signature`; set `X-Hub-Signature-256` for GitHub-style). The full secret is returned **once** — save it.
+**Manage:** `GET /v1/webhooks` (secrets masked) · `DELETE /v1/webhooks?agent_id=` · `POST /v1/webhooks/test?agent_id=`.
+**Envelope:** keys `event_type` (canonical), `event_id`, `agent_id`, `account_id`, `created_at` + event-specific payload. Headers: `X-Webhook-Signature`, `X-AgentLine-Event`.
 
-### ⚡ Cron-Based Event Polling (skip if you've set a webhook URL)
+---
 
-> Use this when you have **no public webhook URL**. A **`no_agent: true` cron job** runs persistently across sessions, costs **zero LLM tokens**, and silently skips cycles when there are no events. Do NOT use a background process (`terminal(background=true)`) because it dies when your session ends and you'll miss events.
+## Events
 
-**Step 1 — Write the polling script** to `~/.hermes/scripts/agentline_events.py`:
+Delivered to your webhook in real time (see Step 6).
 
-```python
-#!/usr/bin/env python3
-"""Poll AgentLine for new events. Prints event details to stdout when events exist.
-Silent on empty cycles — cron only delivers non-empty stdout."""
-import os, sys, json, urllib.request
+**Types:** `call.received`, `call.utterance`, `call.completed`, `call.owner_task`, `call.failed`, `call.busy`, `call.no-answer`, `call.canceled`, `sms.received`, `webhook.test`. `call.utterance` is the live relay turn.
 
-API_KEY = os.environ.get("AGENTLINE_API_KEY", "YOUR_API_KEY_HERE")
-BASE_URL = "https://api.agentline.cloud"
-
-req = urllib.request.Request(
-    f"{BASE_URL}/v1/events/peek",
-    headers={"Authorization": f"Bearer {API_KEY}"}
-)
-try:
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read())
-        count = data.get("pending_count", 0)
-        if count > 0:
-            # Consume the events
-            req2 = urllib.request.Request(
-                f"{BASE_URL}/v1/events",
-                headers={"Authorization": f"Bearer {API_KEY}"}
-            )
-            with urllib.request.urlopen(req2, timeout=10) as resp2:
-                events = json.loads(resp2.read())
-                print(f"📞 {len(events)} AgentLine event(s):")
-                for ev in events:
-                    etype = ev.get("event_type", "?")
-                    payload = ev.get("payload", {})
-                    if etype == "call.completed":
-                        print(f"  • Call from {payload.get('from_number')} — {payload.get('duration_seconds', 0)}s")
-                        transcript = payload.get("transcript", [])
-                        for t in transcript[-5:]:  # last 5 turns
-                            print(f"    [{t.get('role')}] {t.get('text', '')[:120]}")
-                    elif etype == "call.owner_task":
-                        print(f"  • ⚡ OWNER TASK from {payload.get('from_number')} — execute instructions below:")
-                        transcript = payload.get("transcript", [])
-                        for t in transcript:
-                            if t.get("role") == "human":
-                                print(f"    TASK: {t.get('text', '')}")
-                    elif etype == "sms.received":
-                        print(f"  • SMS from {payload.get('from_number')}: {payload.get('body', '')[:200]}")
-                    elif etype == "call.received":
-                        is_owner = payload.get("is_owner_call", False)
-                        print(f"  • Inbound call from {payload.get('from_number')}{' (OWNER)' if is_owner else ''}")
-except Exception as e:
-    # Silent on transient errors — cron will retry next cycle
-    if "401" in str(e) or "403" in str(e):
-        print(f"AGENTLINE_AUTH_ERROR: Check your API key. {e}")
-```
-
-**Step 2 — Create the cron job** (one-time setup):
-```
-cronjob(action='create', name='AgentLine Events', schedule='every 1m', script='agentline_events.py', no_agent=true)
-```
-
-**Step 3 — Verify it's running:**
-```
-cronjob(action='list')
-```
-
-Runs every 1 min. Non-empty stdout → delivered to you. Empty stdout → silent skip (zero cost). If auth fails, prints `AGENTLINE_AUTH_ERROR` — check `cronjob(action='list')` for `last_status`.
-
-### Endpoints
-
-- **Consume events:** `GET /v1/events` — returns events oldest-first, auto-deleted after retrieval
-- **Peek (don't consume):** `GET /v1/events/peek`
-- **Filter:** `?agent_id=agt_xxx` or `?event_type=call.completed` or `?event_type=sms.received`
+**Optional manual fallback** (consume-once mailbox, if you ever need to pull events without the live webhook): `GET /v1/events` (auto-deletes after read), `GET /v1/events/peek` (preview). Filter: `?agent_id=` or `?event_type=`.
 
 ### Event payload structure
+Every event has `event_id`, `agent_id`, `event_type`, and `payload`. Live utterances also include `call_id`, `turn_id`, `session_key`, `conversation`, `push_context_url`, and `push_token`.
 
-Each event contains: `event_id`, `agent_id`, `event_type`, and a `payload` with call/SMS details. `call.completed` payloads include `from_number`, `to_number`, `duration_seconds`, and full `transcript` array. `call.owner_task` payloads are identical to `call.completed` but with `is_owner_task: true` — this means the transcript contains task instructions from the owner (see Owner Task Mode below). `sms.received` payloads include `from_number`, `body`, and `media_url`.
+### Outbound WebSocket
+
+The installer uses `wss://api.agentline.cloud/v1/events/ws?agent_id=agt_xxx&runtime=<runtime>`. Events remain durable until acknowledged. For a live event, send short facts (not a script) plus a `disposition`:
+
+```json
+{"type":"context","event_id":"evt_xxx","call_id":"call_xxx","turn_id":"turn_xxx","push_token":"...","context":"3 unread emails: John invoice, Mary lunch, bank statement","disposition":"done"}
+{"type":"ack","event_id":"evt_xxx"}
+```
+
+Always echo the exact `turn_id`; late or cancelled context is rejected and must never be applied to another question.
 
 ---
 
-## Webhooks
+## Relay Mode (mid-call context injection)
 
-> ⚠️ **Webhooks are a SEPARATE resource** — use `POST /v1/webhooks`, **NOT** a field on `PATCH /v1/agents`.
+Activates automatically when the persistent relay or a healthy webhook is connected. On `call.utterance`, send **short facts**, not a script. The hosted voice rephrases those facts; it does not speak your text verbatim. Pushed context is stored as the assistant turn so later hosted responses retain it as conversation context.
 
-Each agent can have **one** webhook URL. Events are POSTed as signed JSON in real time.
+1. Caller speaks → AgentLine sends a `call.utterance` event over WebSocket or webhook.
+2. Read `call_id`, `turn_id`, `session_key`, and `push_token`.
+3. Do your work quickly.
+4. **Push short facts and a `disposition`** to the full `push_context_url`:
 
-**Set a webhook:** `POST /v1/webhooks` with `{"agent_id": "agt_xxx", "url": "https://..."}` (optional `secret` — auto-generated if omitted). The full secret is returned **once** — save it to verify `X-AgentLine-Signature`.
+```bash
+curl -s -X POST "$PUSH_CONTEXT_URL" \
+  -H "Authorization: Bearer $AGENTLINE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"turn_id":"TURN_ID","context":"3 unread emails: John invoice, Mary lunch, bank statement","disposition":"done"}'
+```
 
-**Manage:** `GET /v1/webhooks` (list, secrets masked) · `DELETE /v1/webhooks?agent_id=` · `POST /v1/webhooks/test?agent_id=` (test delivery)
+   …or via MCP: `push_call_context(call_id="call_xxx", body={"turn_id":"turn_xxx","context":"3 unread emails: John invoice, Mary lunch, bank statement","disposition":"done"})`.
+5. AgentLine applies the disposition. `done`, `facts`, and `failed` close the turn and the hosted voice rephrases the facts in one or two sentences.
 
-**Webhook envelope keys:** `event_type` (canonical — use for filtering), `event` (legacy alias), `event_id`, `agent_id`, `account_id`, `created_at`, plus all event-specific payload fields. Headers: `X-AgentLine-Signature` (HMAC-SHA256) and `X-AgentLine-Event`.
+### Disposition
+
+`POST /v1/calls/{call_id}/context` takes facts in `context` plus a `disposition`:
+
+| `disposition` | What happens |
+|---------------|----------------|
+| `progress` | Adds a note and keeps the caller on hold with canned lines. The text is not spoken. |
+| `done` | Default. Closes the turn. The hosted voice rephrases the facts in one or two sentences. |
+| `facts` | Closes the turn. The hosted voice rephrases the facts in one or two sentences. |
+| `failed` | Closes the turn. The hosted voice rephrases the facts in one or two sentences. |
+| `noop` | Closes the turn with no facts. |
+
+### DO NOT (most common agent failures)
+- ❌ Write a script or the exact words to say. Send facts; the voice rephrases them.
+- ❌ Route the answer to WhatsApp/SMS/chat — the caller is on a phone call and hears only silence.
+- ❌ Create skills/plans/files or ask follow-up questions — the caller is waiting NOW.
+- ❌ Rely on a generic acknowledgement — context must be pushed explicitly.
+
+### Push endpoint
+`POST /v1/calls/{call_id}/context` with `turn_id`, `context` (short facts), and `disposition`. `200` if accepted; `409` if stale/cancelled; `410` if the call ended. Include the event's push token when using token authentication. `turn_id` may also be passed as `?turn_id=turn_xxx`.
+
+### When relay mode does NOT apply
+- **No active relay or webhook** → pure hosted mode.
+- **Polling-only** → not suitable for live turns; install the persistent relay or configure a webhook.
 
 ---
 
 ## SMS
 
-> **⚠️ SMS sending is NOT enabled.** Do NOT attempt outbound SMS/MMS.
+> ⚠️ **Outbound SMS is NOT enabled.** Inbound SMS arrives as `sms.received` events. View history: `GET /v1/messages?limit=20`.
 
-Inbound SMS arrives as `sms.received` events in the Events Mailbox. View message history: `GET /v1/messages?limit=20`
+## Update Agent / Voices
 
----
+`PATCH /v1/agents/{id}`: `system_prompt`, `initial_greeting`, `name`, `voice_id` (`female-1/2/3`, `male-1/2/3`), `owner_phone`, `voicemail_message` (required if outbound calls should leave a mailbox message). Get/list: `GET /v1/agents/{id}`, `GET /v1/agents`.
 
-## Update Agent (System Prompt, Voice, etc.)
-
-`PATCH /v1/agents/$AGENTLINE_AGENT_ID` with any of:
-
-| Field | Description |
-|-------|-------------|
-| `system_prompt` | Default instructions for ALL calls (inbound + outbound). Per-call override via `POST /v1/calls` takes priority. |
-| `initial_greeting` | Default opening line spoken on ALL calls (inbound + outbound). Per-call override via `POST /v1/calls` takes priority. |
-| `name` | Display name |
-| `voice_id` | `"female-1"`, `"female-2"`, `"female-3"`, `"male-1"`, `"male-2"`, `"male-3"` |
-| `owner_phone` | Owner's phone number in E.164 format. Calls from this number enter **task mode**. |
-
----
-
-## Get/List Agents
-
-- **Get one:** `GET /v1/agents/$AGENTLINE_AGENT_ID`
-- **List all:** `GET /v1/agents`
-
----
-
-## Voice Settings
-
-Priority (highest wins): per-call → per-agent → per-account
-
-- **List voices:** `GET /v1/voices`
-- **Set account default:** `PATCH /v1/account/voice` with `{"voice_id": "female-1"}`
-- **Check current:** `GET /v1/account/voice`
-- **Reset to default:** `DELETE /v1/account/voice`
-
----
+Voice priority (highest wins): per-call → agent → account. Account voice: `GET /v1/voices`, `PATCH /v1/account/voice`, `GET /v1/account/voice`, `DELETE /v1/account/voice`.
 
 ## Phone Numbers
 
-Each agent needs one phone number. Only US numbers supported. **$2.00 per number.**
+Each agent needs one number. **US only. $2.00/month.**
 
-### Provision (Buy) a Number
-
-`POST /v1/numbers` with:
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `agent_id` | Yes | Agent to attach to |
-| `country` | Yes | Must be `"US"` |
-| `area_code` | No | Preferred 3-digit area code (e.g. `"212"`, `"313"`). **Always ask the user!** |
-| `number_type` | No | `"local"` or `"tollfree"` (default: local) |
-
-If no numbers are available for the requested area code, the API returns an error — ask the user for a different area code.
-
-### List Numbers
-
-`GET /v1/numbers`
-
----
+`POST /v1/numbers`: `agent_id` (req), `country="US"` (req), `area_code` (**always ask the user!**), `number_type` (`local`/`tollfree`). List: `GET /v1/numbers`. Do not release numbers.
 
 ## Billing
 
-- **Check balance:** `GET /v1/billing/balance`
-- **Expenditure:** `GET /v1/billing/expenditure?period=current_month` (also: `last_month`, `all_time`, `YYYY-MM`)
-- **Call charges:** `GET /v1/billing/expenditure/calls?limit=10`
-- **Number charges:** `GET /v1/billing/expenditure/numbers`
-- **Verify charge:** `GET /v1/billing/verify/<call_id>`
+Balance: `GET /v1/billing/balance`. Expenditure: `GET /v1/billing/expenditure?period=current_month` (also `last_month`, `all_time`, `YYYY-MM`). Call charges: `GET /v1/billing/expenditure/calls`. Number charges: `GET /v1/billing/expenditure/numbers`. Verify: `GET /v1/billing/verify/{call_id}`.
 
-### Rates
+Rates: calls **$0.10/min**. A 0-second call is free. A connected call has a one-minute minimum, then bills per second, rounded up to the cent. Number: **$2.00/month**.
 
-| Item | Cost |
-|------|------|
-| Calls (in/out) | $0.10/min (billed per second) |
-| Phone number | $2.00 (one-time) |
+## Owner Task Mode
 
----
+Activates whenever agent + owner connect (inbound OR outbound). The AI enters task mode ("Hey boss, what would you like me to do?"), listens, confirms, then emits `call.owner_task` (payload `is_owner_task: true`). Set owner via `PATCH /v1/agents/{id} {"owner_phone": "+1XXXXXXXXXX"}`.
+
+- **Inbound** — owner calls the agent's number → `call.received` (`is_owner_call: true`), then `call.owner_task`.
+- **Outbound** — `POST /v1/calls` to `owner_phone` → poll until `completed` → `call.owner_task`.
+
+> ⚠️ `call.owner_task` = instructions to EXECUTE, not a conversation to log.
 
 ## Feedback
 
-Hit a bug, an error, or something confusing? Send it to the team — **don't silently swallow errors.**
-
-`POST /v1/feedback` with:
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `category` | Yes | `bug` · `difficulty` · `feature_request` · `feedback` |
-| `message` | Yes | Enough detail to reproduce — endpoint, request body, error text, `agent_id` |
-
-```bash
-curl -s -X POST $AGENTLINE_URL/v1/feedback \
-  -H "Authorization: Bearer $AGENTLINE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"category": "bug", "message": "PATCH /v1/agents returns 500 when owner_phone is null"}'
-```
-
----
+Bug, error, or something confusing? `POST /v1/feedback {"category": "bug|difficulty|feature_request|feedback", "message": "..."}` — include enough detail to reproduce.
 
 ## MCP Server
 
-AgentLine exposes a full MCP server at `https://api.agentline.cloud/mcp` with 21+ tools. For Claude Desktop, Cursor, or any MCP-compatible client, connect directly via Streamable HTTP:
+Full MCP at `https://api.agentline.cloud/mcp` (21+ tools). Claude Desktop / Cursor / any MCP client:
 
 ```json
 {
@@ -361,47 +262,21 @@ AgentLine exposes a full MCP server at `https://api.agentline.cloud/mcp` with 21
 }
 ```
 
-All REST endpoints above are also available as MCP tools (`create_agent`, `make_outbound_call`, `poll_events`, etc.). See `references/mcp-server.md` for additional config formats and platform-specific setup.
-
----
-
-## Owner Task Mode
-
-Owner Task Mode activates whenever the agent and owner connect on a call — **inbound OR outbound**. The AI enters **task mode**: greets with "Hey boss, what would you like me to do?", listens, confirms, then pushes a `call.owner_task` event. Set owner phone via `PATCH /v1/agents/$AGENTLINE_AGENT_ID` with `{"owner_phone": "+1XXXXXXXXXX"}`.
-
-**It triggers in BOTH directions — do not treat an owner call as a regular support call:**
-- **Inbound** — the owner calls the agent's number from `owner_phone`. You'll see `call.received` with `is_owner_call: true`, then `call.owner_task` when it ends.
-- **Outbound** — you (or the agent) dial the owner's number via `POST /v1/calls` with `to_number` = `owner_phone`. There is **no** `call.received`; poll `GET /v1/calls/<call_id>` until `status=completed` as for any outbound call, and the completed call emits `call.owner_task` (payload carries `is_owner_task: true`). Treat the transcript's human turns as task instructions to EXECUTE.
-
-**Handling `call.owner_task` events:** Extract the human turns from the transcript — these are task instructions to EXECUTE (make a call, update settings, etc.), not conversations to log. Report results back to the human.
-
-> ⚠️ **`call.owner_task` events are instructions to EXECUTE.** Do NOT just log them.
-
-> ⚠️ **`call.received` with `is_owner_call: true`** = owner is on the phone (inbound). Wait for `call.owner_task` when it ends.
-
-> ⚠️ **For outbound owner calls there is no `call.received`** — recognize owner calls by matching `to_number` against `owner_phone`, and expect `call.owner_task` on completion.
-
----
-
-## Skill Auto-Update
-
-At the **start of every new conversation**, fetch `https://agentline.cloud/skill.md` and compare the `version:` field. If newer than `1.13`, replace the local SKILL.md and re-read before proceeding.
-
-> ⚠️ **Always check for updates first.** Stale skill versions may cause incorrect API calls or missed features.
+All REST endpoints are also MCP tools (`create_agent`, `make_outbound_call`, `push_call_context`, etc.).
 
 ---
 
 ## Rules
 
-1. **E.164 format** — always `+1XXXXXXXXXX` for US numbers.
-2. **Confirm before calling** — never auto-dial without explicit consent.
-3. **No outbound SMS** — inform user it's not available if they ask.
-4. **Keep voice responses extremely short** — under 15 words per turn. Max 12 for outbound feedback/support calls. The voice AI rambles without tight constraints.
-5. **US only** — country must be `"US"`.
-6. **Don't release numbers** — numbers are permanent once provisioned.
-7. **Always retrieve transcripts** — poll until `completed`, fetch transcript, summarize for human.
-8. **Always receive events** — use a webhook URL (`POST /v1/webhooks`) or poll `GET /v1/events` for inbound calls and SMS. Proactively check at conversation start.
-9. **Voice changes take effect on next call** — update immediately when asked.
-10. **Execute owner tasks** — when you receive a `call.owner_task` event (inbound OR outbound owner call), extract the human turns and execute them as task instructions. Do NOT just log them.
-11. **Auto-update skill** — at the start of every new conversation, check `https://agentline.cloud/skill.md` for a newer version. If found, replace the local copy and re-read before proceeding.
-12. **Report issues via feedback** — if you hit a bug, unexpected error, or something confusing, submit it via `POST /v1/feedback` with the appropriate `category` (`bug`, `difficulty`, `feature_request`, or `feedback`). Include enough detail to reproduce. Don't silently swallow errors.
+1. **E.164** — always `+1XXXXXXXXXX`.
+2. **Confirm before calling** — never auto-dial without consent.
+3. **No outbound SMS.**
+4. **Short voice responses** — under 15 words/turn (max 12 for outbound). The AI rambles without tight constraints.
+5. **US only.**
+6. **Don't release numbers** — permanent once provisioned.
+7. **Always retrieve transcripts** — on outbound, ping every 10s until the call ends, then fetch the final transcript and summarize for the human.
+8. **Install the persistent relay** — receive live turns through WebSocket and inspect non-live events through its list/ack inbox. Use a webhook only as fallback.
+9. **Voice changes apply on the next call.**
+10. **Execute owner tasks** — `call.owner_task` human turns are instructions to act on, not log.
+11. **Push facts on `call.utterance`** — echo `call_id`, `turn_id`, and `push_token`. Send short facts plus a `disposition` (`done` by default), not a script. `progress` only holds with canned lines and is not spoken. `done`, `facts`, and `failed` close the turn and the hosted voice rephrases the facts. `noop` closes with no facts. A 409 means stop; never reuse the result for another turn.
+12. **Report issues** via `POST /v1/feedback`.
