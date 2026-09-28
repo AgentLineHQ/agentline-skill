@@ -226,7 +226,9 @@ Voice priority (highest wins): per-call → agent → account. Account voice: `G
 
 Each agent needs one number. **US only. $2.00/month.**
 
-`POST /v1/numbers`: `agent_id` (req), `country="US"` (req), `area_code` (**always ask the user!**), `number_type` (`local`/`tollfree`). List: `GET /v1/numbers`. Do not release numbers.
+`POST /v1/numbers`: `agent_id` (req), `country="US"` (req), `area_code` (**always ask the user!**), `number_type` (`local`/`tollfree`). List: `GET /v1/numbers`.
+
+**Release** (only if the human asks): `POST /v1/numbers/{number_id}/release` (MCP: `release_phone_number`). ⚠️ **Destructive** — unrents the number from the carrier. It cannot be recovered. Refused while a call or lease is still active.
 
 ## Billing
 
@@ -273,7 +275,7 @@ All REST endpoints are also MCP tools (`create_agent`, `make_outbound_call`, `pu
 3. **No outbound SMS.**
 4. **Short voice responses** — under 15 words/turn (max 12 for outbound). The AI rambles without tight constraints.
 5. **US only.**
-6. **Don't release numbers** — permanent once provisioned.
+6. **Release numbers only when the human asks** — `POST /v1/numbers/{number_id}/release` is destructive. It unrents the number from the carrier and cannot be undone. Refused if a call or lease is still active.
 7. **Always retrieve transcripts** — on outbound, ping every 10s until the call ends, then fetch the final transcript and summarize for the human.
 8. **Install the persistent relay** — receive live turns through WebSocket and inspect non-live events through its list/ack inbox. Use a webhook only as fallback.
 9. **Voice changes apply on the next call.**
