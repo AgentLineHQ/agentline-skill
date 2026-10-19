@@ -234,7 +234,7 @@ Each agent needs one number. **US and Canada. Included in your plan; additional 
 
 Balance: `GET /v1/billing/balance`. Expenditure: `GET /v1/billing/expenditure?period=current_month` (also `last_month`, `all_time`, `YYYY-MM`). Call charges: `GET /v1/billing/expenditure/calls`. Number charges: `GET /v1/billing/expenditure/numbers`. Verify: `GET /v1/billing/verify/{call_id}`.
 
-Monthly plans: Individual **$15** (1 number, 60 min, 300 SMS), Scale **$50** (3 numbers, 200 min, 1,000 SMS), Startup **$200** (12 numbers, 1,000 min, 3,000 SMS). Plan allowances are used first; only usage beyond them is deducted from the wallet. Beyond the allowance: calls **$0.12/min**. A 0-second call is free. A connected call has a one-minute minimum, then bills per second, rounded up to the cent. Additional number: **$3.00/month**. Inbound SMS: **$0.02/msg**.
+Monthly plans: Individual **$20** (1 number, 100 min, 400 SMS), Scale **$50** (3 numbers, 200 min, 1,000 SMS), Startup **$200** (12 numbers, 1,000 min, 3,000 SMS). Plan allowances are used first; only usage beyond them is deducted from the wallet. Beyond the allowance: calls **$0.12/min**. A 0-second call is free. A connected call has a one-minute minimum, then bills per second, rounded up to the cent. Additional number: **$3.00/month**. SMS: **$0.02/msg**, inbound and outbound.
 
 ## Owner Task Mode
 
