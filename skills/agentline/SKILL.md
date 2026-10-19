@@ -13,7 +13,7 @@ metadata:
 
 # AgentLine — AI Telephony Skill (v1.19)
 
-Give your AI agent a real US phone number and voice. Install the persistent relay to receive inbound calls, SMS, and live-call utterances in real time; use a public HTTPS webhook as fallback.
+Give your AI agent a real US or Canada phone number and voice. Install the persistent relay to receive inbound calls, SMS, and live-call utterances in real time; use a public HTTPS webhook as fallback.
 
 ## First-Time Setup
 
@@ -224,9 +224,9 @@ Voice priority (highest wins): per-call → agent → account. Account voice: `G
 
 ## Phone Numbers
 
-Each agent needs one number. **US only. $2.00/month.**
+Each agent needs one number. **US and Canada. Included in your plan; additional numbers $3.00/month.**
 
-`POST /v1/numbers`: `agent_id` (req), `country="US"` (req), `area_code` (**always ask the user!**), `number_type` (`local`/`tollfree`). List: `GET /v1/numbers`.
+`POST /v1/numbers`: `agent_id` (req), `country="US"` or `"CA"` (req), `area_code` (**always ask the user!**), `number_type` (`local`/`tollfree`). List: `GET /v1/numbers`.
 
 **Release** (only if the human asks): `POST /v1/numbers/{number_id}/release` (MCP: `release_phone_number`). ⚠️ **Destructive** — unrents the number from the carrier. It cannot be recovered. Refused while a call or lease is still active.
 
@@ -234,7 +234,7 @@ Each agent needs one number. **US only. $2.00/month.**
 
 Balance: `GET /v1/billing/balance`. Expenditure: `GET /v1/billing/expenditure?period=current_month` (also `last_month`, `all_time`, `YYYY-MM`). Call charges: `GET /v1/billing/expenditure/calls`. Number charges: `GET /v1/billing/expenditure/numbers`. Verify: `GET /v1/billing/verify/{call_id}`.
 
-Rates: calls **$0.10/min**. A 0-second call is free. A connected call has a one-minute minimum, then bills per second, rounded up to the cent. Number: **$2.00/month**.
+Monthly plans: Individual **$15** (1 number, 60 min, 300 SMS), Scale **$50** (3 numbers, 200 min, 1,000 SMS), Startup **$200** (12 numbers, 1,000 min, 3,000 SMS). Plan allowances are used first; only usage beyond them is deducted from the wallet. Beyond the allowance: calls **$0.12/min**. A 0-second call is free. A connected call has a one-minute minimum, then bills per second, rounded up to the cent. Additional number: **$3.00/month**. Inbound SMS: **$0.02/msg**.
 
 ## Owner Task Mode
 
@@ -274,7 +274,7 @@ All REST endpoints are also MCP tools (`create_agent`, `make_outbound_call`, `pu
 2. **Confirm before calling** — never auto-dial without consent.
 3. **No outbound SMS.**
 4. **Short voice responses** — under 15 words/turn (max 12 for outbound). The AI rambles without tight constraints.
-5. **US only.**
+5. **US and Canada** — use country `"US"` or `"CA"`.
 6. **Release numbers only when the human asks** — `POST /v1/numbers/{number_id}/release` is destructive. It unrents the number from the carrier and cannot be undone. Refused if a call or lease is still active.
 7. **Always retrieve transcripts** — on outbound, ping every 10s until the call ends, then fetch the final transcript and summarize for the human.
 8. **Install the persistent relay** — receive live turns through WebSocket and inspect non-live events through its list/ack inbox. Use a webhook only as fallback.
