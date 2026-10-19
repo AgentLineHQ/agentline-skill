@@ -214,7 +214,7 @@ curl -s -X POST "$PUSH_CONTEXT_URL" \
 
 ## SMS
 
-AgentLine numbers send and receive SMS. Send with `POST /v1/messages` (REST only; not an MCP tool):
+AgentLine numbers send and receive SMS. Send with `POST /v1/messages` (MCP: `send_sms`):
 
 ```bash
 curl -s -X POST https://api.agentline.cloud/v1/messages \
